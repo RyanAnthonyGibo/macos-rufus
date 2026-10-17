@@ -106,14 +106,15 @@ def main():
         emit(progress_file, stage="mount", status="done", uefi=iso_info["uefi"])
 
         emit(progress_file, stage="format", status="start")
-        rufus.run(["diskutil", "unmountDisk", disk_node], check=False)
+        rufus.run(["diskutil", "unmountDisk", "force", disk_node], check=False)
         rufus.format_usb(disk_node)
         emit(progress_file, stage="format", status="done")
 
         emit(progress_file, stage="bootsectors", status="start")
-        rufus.set_mbr_active_partition(disk_node)
-        rufus.write_windows_vbr(disk_node, mount_point)
+        mbr_ok = rufus.set_mbr_active_partition(disk_node)
+        vbr_ok = rufus.write_windows_vbr(disk_node, mount_point)
         emit(progress_file, stage="bootsectors", status="done")
+        boot_sector_note = rufus.legacy_boot_sector_notice(mbr_ok, vbr_ok)
 
         rufus.run(["diskutil", "mount", disk_node + "s1"], check=False)
         usb_volume = rufus.get_volume_path(disk_node)
@@ -156,12 +157,12 @@ def main():
             emit(progress_file, stage="copy_wim", status="skipped")
 
         emit(progress_file, stage="eject", status="start")
-        rufus.run(["diskutil", "unmountDisk", disk_node], check=False)
+        rufus.run(["diskutil", "unmountDisk", "force", disk_node], check=False)
         emit(progress_file, stage="eject", status="done")
 
         elapsed = time.monotonic() - start_time
         emit(progress_file, stage="complete", uefi=iso_info["uefi"],
-             elapsed=elapsed, log_path=str(log_path))
+             elapsed=elapsed, log_path=str(log_path), notice=boot_sector_note)
         rufus.log.info("rufus_worker finished successfully in %.1fs", elapsed)
 
     except Exception as e:

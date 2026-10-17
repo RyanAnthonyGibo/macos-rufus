@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """macos-rufus: create bootable Windows USB drives on macOS."""
 
+import errno
+import fcntl
 import json
 import logging
 import os
@@ -1134,7 +1136,27 @@ def mount_iso(iso: Path) -> str:
 
 
 def unmount_iso(mount_point: str):
-    run(["hdiutil", "detach", mount_point, "-force"], check=False)
+    """Detach an ISO mount.
+
+    The first `hdiutil detach -force` can still return "Resource busy" if
+    DiskArbitration or a file handle that is still closing has the volume.
+    Retry a few times; a missing mount counts as already detached.
+    """
+    last = None
+    for attempt in range(3):
+        last = run(["hdiutil", "detach", mount_point, "-force"], check=False)
+        if last.returncode == 0:
+            return
+        err = f"{last.stdout or ''} {last.stderr or ''}"
+        if re.search(r"No such (file|disk)|not currently mounted|couldn't find", err, re.I):
+            return
+        log.warning("hdiutil detach %s failed (%s/3): %s", mount_point, attempt + 1, err.strip())
+        if attempt < 2:
+            time.sleep(0.4)
+    console.print(
+        f"[yellow]Could not unmount ISO at {mount_point} — it may still be mounted.[/yellow]"
+    )
+    log.warning("Could not unmount ISO at %s: %s", mount_point, ((last.stderr if last else "") or "").strip())
 
 
 def detect_iso(mount_point: str) -> dict:
@@ -1260,15 +1282,169 @@ def _fat_label(label: str) -> str:
 
 _DD_CHUNK = 4 * 1024 * 1024  # multiple of 512 — required for raw device writes
 
+# Opening /dev/rdiskN for write returns EBUSY (Errno 16) while any volume on
+# that disk is mounted. After eraseDisk, DiskArbitration remounts the new
+# FAT32 volume on its own, often in the gap between `diskutil unmountDisk`
+# returning and the following open(). A read-only open can still succeed.
+_RAW_OPEN_ATTEMPTS = 10
+_BUSY_ERRNOS = frozenset({
+    errno.EBUSY, errno.EAGAIN, errno.EINTR, errno.EIO, errno.EPERM,
+})
+
+
+def _is_busy_error(err: BaseException) -> bool:
+    return isinstance(err, OSError) and err.errno in _BUSY_ERRNOS
+
+
+def _whole_disk(node: str) -> str:
+    """`/dev/disk13s1` -> `/dev/disk13`. A whole-disk node is unchanged."""
+    match = re.match(r"^(/dev/disk\d+)s\d+$", node)
+    return match.group(1) if match else node
+
+
+def _raw_device(node: str) -> str:
+    """Buffered `/dev/diskN` -> raw `/dev/rdiskN` (partition nodes too)."""
+    if node.startswith("/dev/rdisk"):
+        return node
+    return node.replace("/dev/disk", "/dev/rdisk", 1)
+
+
+def _force_unmount_device(node: str) -> None:
+    """Force-unmount every volume that would make the raw device busy."""
+    whole = _whole_disk(node)
+    if node != whole:
+        run(["diskutil", "unmount", "force", node], check=False)
+    run(["diskutil", "unmountDisk", "force", whole], check=False)
+
+
+def _fsync_raw(fd: int) -> None:
+    """Push a boot sector or image write out of the kernel cache."""
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        log.warning("fsync on raw device failed: %s", e)
+    if hasattr(fcntl, "F_FULLFSYNC"):
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+        except OSError:
+            pass
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    off = 0
+    while off < len(view):
+        try:
+            n = os.write(fd, view[off:])
+        except InterruptedError:
+            continue
+        if n <= 0:
+            raise OSError(errno.EIO, "short write on raw device")
+        off += n
+
+
+def _pwrite_all(fd: int, data: bytes, offset: int) -> None:
+    view = memoryview(data)
+    off = 0
+    while off < len(view):
+        try:
+            n = os.pwrite(fd, view[off:], offset + off)
+        except InterruptedError:
+            continue
+        if n <= 0:
+            raise OSError(errno.EIO, "short write on raw device")
+        off += n
+
+
+def _read_all(fd: int, size: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < size:
+        try:
+            chunk = os.read(fd, size - len(buf))
+        except InterruptedError:
+            continue
+        if not chunk:
+            break
+        buf += chunk
+    return bytes(buf)
+
+
+def _with_raw_rdwr(node: str, action, *, attempts: int = _RAW_OPEN_ATTEMPTS):
+    """Run `action(fd)` against a writable raw device, retrying EBUSY.
+
+    DiskArbitration remounts a volume that was just formatted, so the open
+    has to be repeated after another force-unmount. Read and write share one
+    fd: closing the read and reopening for write is itself enough of a gap
+    for the volume to come back. `action` must finish its I/O before returning;
+    the fd is closed when it returns. A non-busy OSError is raised immediately.
+    """
+    raw = _raw_device(node)
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    last_err: OSError | None = None
+    for attempt in range(attempts):
+        _force_unmount_device(node)
+        # Open immediately after the unmount. A sleep here is a window in
+        # which DiskArbitration mounts the volume again. Later attempts wait
+        # so a kernel that has not dropped the busy state yet can settle.
+        if attempt:
+            time.sleep(min(0.25 * attempt, 1.0))
+        fd = None
+        try:
+            fd = os.open(raw, flags)
+            if attempt:
+                log.info("Opened %s for writing after %s attempts", raw, attempt + 1)
+            return action(fd)
+        except OSError as e:
+            last_err = e
+            log.warning("Raw I/O on %s failed (%s/%s): %s", raw, attempt + 1, attempts, e)
+            if not _is_busy_error(e):
+                raise
+        finally:
+            if fd is not None:
+                os.close(fd)
+    if last_err is None:
+        raise OSError(errno.EBUSY, f"could not open {raw}")
+    raise last_err
+
+
+def _mount_partition(partition_node: str) -> None:
+    """Mount a partition, retrying while DiskArbitration is still settling."""
+    last = None
+    for attempt in range(5):
+        last = run(["diskutil", "mount", partition_node], check=False)
+        if last.returncode == 0:
+            return
+        if attempt < 4:
+            time.sleep(0.4)
+    detail = ""
+    if last is not None:
+        detail = (last.stderr or last.stdout or "").strip()
+    raise RuntimeError(
+        f"Could not remount {partition_node}" + (f": {detail}" if detail else "")
+    )
+
+
+def legacy_boot_sector_notice(mbr_ok: bool, vbr_ok: bool) -> str | None:
+    """User-facing note when a legacy BIOS sector could not be written."""
+    if mbr_ok and vbr_ok:
+        return None
+    missed = []
+    if not mbr_ok:
+        missed.append("MBR active flag")
+    if not vbr_ok:
+        missed.append("FAT32 boot sector")
+    return (
+        f"Could not write {' and '.join(missed)}. "
+        "UEFI boot (needed for Windows 11) is unaffected. Legacy BIOS boot may not work."
+    )
+
 
 def dd_write_iso(iso: Path, disk_node: str, progress_cb=None, verify: bool = False, verify_cb=None):
     """Raw-write an isohybrid ISO to the whole disk (like `dd bs=4m`).
 
     progress_cb(done_bytes, total_bytes); verify_cb(done_bytes, total_bytes).
     """
-    raw = disk_node.replace("/dev/disk", "/dev/rdisk")
     total = iso.stat().st_size
-    run(["diskutil", "unmountDisk", "force", disk_node], check=False)
 
     rich_progress = None
     if progress_cb is None:
@@ -1280,40 +1456,57 @@ def dd_write_iso(iso: Path, disk_node: str, progress_cb=None, verify: bool = Fal
         progress_cb = lambda done, _t: rich_progress.update(task, completed=done)
 
     try:
-        done = 0
-        with open(iso, "rb") as src, open(raw, "r+b", buffering=0) as dst:
-            while True:
-                chunk = src.read(_DD_CHUNK)
-                if not chunk:
-                    break
-                if len(chunk) % 512:
-                    chunk += b"\0" * (512 - len(chunk) % 512)
-                dst.write(chunk)
-                done += min(len(chunk), total - done)
-                progress_cb(done, total)
-            os.fsync(dst.fileno())
+        def _write(fd: int):
+            done = 0
+            with open(iso, "rb") as src:
+                while True:
+                    chunk = src.read(_DD_CHUNK)
+                    if not chunk:
+                        break
+                    if len(chunk) % 512:
+                        chunk += b"\0" * (512 - len(chunk) % 512)
+                    _write_all(fd, chunk)
+                    done += min(len(chunk), total - done)
+                    progress_cb(done, total)
+            _fsync_raw(fd)
+
+        def _verify(fd: int):
+            done = 0
+            with open(iso, "rb") as src:
+                while True:
+                    want = src.read(_DD_CHUNK)
+                    if not want:
+                        break
+                    padded = len(want) + (-len(want) % 512)
+                    got = _read_all(fd, padded)[:len(want)]
+                    if got != want:
+                        raise RuntimeError(
+                            f"Verification failed near byte {done} — the drive may be faulty."
+                        )
+                    done += len(want)
+                    if verify_cb:
+                        verify_cb(done, total)
+
+        try:
+            _with_raw_rdwr(disk_node, _write)
+            if verify:
+                log.info("Verifying %s", disk_node)
+                if rich_progress is not None:
+                    console.print("[dim]Verifying...[/dim]")
+                _with_raw_rdwr(disk_node, _verify)
+                if rich_progress is not None:
+                    console.print("[green]✓ Verified[/green]")
+        except OSError as e:
+            if _is_busy_error(e):
+                raise RuntimeError(
+                    f"{e}. The drive stayed busy after repeated force-unmounts. "
+                    "Close Disk Utility and any app using the USB, then run macos-rufus again."
+                ) from e
+            raise
     finally:
         if rich_progress:
             rich_progress.stop()
 
-    if verify:
-        log.info("Verifying %s", disk_node)
-        done = 0
-        if rich_progress is not None:
-            console.print("[dim]Verifying...[/dim]")
-        with open(iso, "rb") as src, open(raw, "rb", buffering=0) as dst:
-            while True:
-                want = src.read(_DD_CHUNK)
-                if not want:
-                    break
-                got = dst.read(len(want) + (-len(want) % 512))[:len(want)]
-                if got != want:
-                    raise RuntimeError(f"Verification failed near byte {done} — the drive may be faulty.")
-                done += len(want)
-                if verify_cb:
-                    verify_cb(done, total)
-        if rich_progress is not None:
-            console.print("[green]✓ Verified[/green]")
     run(["diskutil", "unmountDisk", "force", disk_node], check=False)
 
 
@@ -1322,7 +1515,7 @@ def linux_copy_to_usb(iso_mount: str, disk_node: str, scheme: str, label: str, p
     if scheme not in ("MBR", "GPT"):
         raise ValueError(f"bad partition scheme {scheme!r}")
     fmt = "MBRFormat" if scheme == "MBR" else "GPTFormat"
-    run(["diskutil", "unmountDisk", disk_node], check=False)
+    run(["diskutil", "unmountDisk", "force", disk_node], check=False)
     log.info("Formatting %s as FAT32 %s label=%s", disk_node, scheme, label)
     run(["diskutil", "eraseDisk", "FAT32", label, fmt, disk_node], capture=progress_cb is not None)
 
@@ -1336,7 +1529,7 @@ def linux_copy_to_usb(iso_mount: str, disk_node: str, scheme: str, label: str, p
     if too_big:
         raise RuntimeError(f"{too_big[0].name} is larger than 4 GiB and can't be stored on FAT32.")
     copy_files_except_wim(iso_mount, Path(mp), progress_cb=progress_cb)
-    run(["diskutil", "unmountDisk", disk_node], check=False)
+    run(["diskutil", "unmountDisk", "force", disk_node], check=False)
 
 
 # ── USB detection ─────────────────────────────────────────────────────────────
@@ -1403,26 +1596,41 @@ def get_volume_path(disk_node: str) -> Path:
     return Path(mp)
 
 
-def set_mbr_active_partition(disk_node: str):
+def set_mbr_active_partition(disk_node: str) -> bool:
     """
     Set first MBR partition entry as active (bootable flag = 0x80).
     Required for legacy BIOS to hand off to the VBR.
     Partition table starts at MBR byte 446; each entry is 16 bytes.
+
+    Returns False, instead of raising, when the raw disk stays busy. UEFI
+    boot does not read this flag; Windows 8.1 / 10 / 11 do not need it.
     """
-    raw = disk_node.replace("/dev/disk", "/dev/rdisk")
-    # Must unmount before opening raw disk device — macOS blocks rdisk while mounted
-    run(["diskutil", "unmountDisk", disk_node], check=False)
-    with open(raw, "rb") as f:
-        mbr = bytearray(f.read(512))
-    for i, off in enumerate((446, 462, 478, 494)):
-        mbr[off] = 0x80 if i == 0 else 0x00
-    with open(raw, "r+b") as f:
-        f.seek(0)
-        f.write(mbr)
+    def _write(fd: int):
+        mbr = bytearray(os.pread(fd, 512, 0))
+        if len(mbr) != 512:
+            raise RuntimeError(f"Short MBR read ({len(mbr)} bytes) from {_raw_device(disk_node)}")
+        for i, off in enumerate((446, 462, 478, 494)):
+            mbr[off] = 0x80 if i == 0 else 0x00
+        _pwrite_all(fd, bytes(mbr), 0)
+        _fsync_raw(fd)
+
+    try:
+        _with_raw_rdwr(disk_node, _write)
+    except OSError as e:
+        if not _is_busy_error(e):
+            raise
+        console.print(
+            f"[yellow]Could not set MBR active flag ({e}) — skipping. "
+            "UEFI boot (needed for Windows 11) is unaffected.[/yellow]"
+        )
+        log.warning("MBR active flag not set on %s: %s", disk_node, e)
+        return False
     console.print("[green]✓ MBR active partition flag set[/green]")
+    log.info("MBR active partition flag set on %s", disk_node)
+    return True
 
 
-def write_windows_vbr(disk_node: str, iso_mount: str):
+def write_windows_vbr(disk_node: str, iso_mount: str) -> bool:
     """
     Patch the FAT32 VBR on the USB partition with Windows boot code.
 
@@ -1436,6 +1644,10 @@ def write_windows_vbr(disk_node: str, iso_mount: str):
       3-89  : BIOS Parameter Block      ← keep from diskutil (filesystem data)
       90-509: boot code                 ← take from bootsect.dat
       510-511: 0x55AA signature         ← take from bootsect.dat
+
+    Returns False when the sector could not be written because the device
+    stayed busy. The partition is still remounted so the file copy can run.
+    UEFI boot does not use this sector.
     """
     bootsect = Path(iso_mount) / "boot" / "bootsect.dat"
     if not bootsect.exists():
@@ -1443,34 +1655,53 @@ def write_windows_vbr(disk_node: str, iso_mount: str):
             "[yellow]boot/bootsect.dat not found in ISO — skipping VBR write.[/yellow]\n"
             "[dim]Normal for Windows 8.1+ ISOs — UEFI boot is unaffected; only Legacy BIOS boot may not work.[/dim]"
         )
-        return
+        return True
+
+    new_vbr = bytearray(bootsect.read_bytes()[:512])
+    if len(new_vbr) != 512:
+        console.print(
+            "[yellow]boot/bootsect.dat is not a 512-byte boot sector — skipping VBR write.[/yellow]\n"
+            "[dim]UEFI boot is unaffected; only Legacy BIOS boot may not work.[/dim]"
+        )
+        log.warning("bootsect.dat is %s bytes; VBR not written", len(new_vbr))
+        return False
 
     partition_node = disk_node + "s1"
-    raw_part = partition_node.replace("/dev/disk", "/dev/rdisk")
+    written = True
 
-    with open(bootsect, "rb") as f:
-        new_vbr = bytearray(f.read(512))
+    def _write(fd: int):
+        current_vbr = bytearray(os.pread(fd, 512, 0))
+        if len(current_vbr) != 512:
+            raise RuntimeError(
+                f"Short VBR read ({len(current_vbr)} bytes) from {_raw_device(partition_node)}"
+            )
+        merged = bytearray(512)
+        merged[0:3] = new_vbr[0:3]          # jump
+        merged[3:90] = current_vbr[3:90]    # BPB preserved
+        merged[90:512] = new_vbr[90:512]    # Windows boot code + signature
+        _pwrite_all(fd, bytes(merged), 0)
+        _fsync_raw(fd)
 
-    # Unmount partition so macOS doesn't interfere with raw sector write
-    run(["diskutil", "unmount", partition_node], check=False)
+    try:
+        _with_raw_rdwr(partition_node, _write)
+    except OSError as e:
+        if not _is_busy_error(e):
+            raise
+        written = False
+        console.print(
+            f"[yellow]Could not write Windows boot sector ({e}) — skipping. "
+            "UEFI boot (needed for Windows 11) is unaffected; "
+            "Legacy BIOS boot may not work.[/yellow]"
+        )
+        log.warning("VBR not written on %s: %s", partition_node, e)
+    else:
+        console.print("[green]✓ Windows FAT32 VBR written[/green]")
+        log.info("Windows FAT32 VBR written on %s", partition_node)
 
-    with open(raw_part, "rb") as f:
-        current_vbr = bytearray(f.read(512))
-
-    merged = bytearray(512)
-    merged[0:3]    = new_vbr[0:3]        # jump
-    merged[3:90]   = current_vbr[3:90]   # BPB preserved
-    merged[90:512] = new_vbr[90:512]     # Windows boot code + signature
-
-    with open(raw_part, "r+b") as f:
-        f.seek(0)
-        f.write(merged)
-
-    console.print("[green]✓ Windows FAT32 VBR written[/green]")
-
-    # Remount so file copy can proceed
-    run(["diskutil", "mount", partition_node], check=True)
+    # Remount so file copy can proceed. The raw write above force-unmounted the disk.
+    _mount_partition(partition_node)
     console.print("[green]✓ Partition remounted[/green]")
+    return written
 
 
 # ── file copy ─────────────────────────────────────────────────────────────────
@@ -1885,16 +2116,17 @@ def main():
             check_wim_export_space(preflight_wim)
 
         # 5. Format USB
-        run(["diskutil", "unmountDisk", disk_node], check=False)
+        run(["diskutil", "unmountDisk", "force", disk_node], check=False)
         log.info("Formatting %s as FAT32 MBR", disk_node)
         format_usb(disk_node)
 
         # 6. Write Windows boot sector (legacy BIOS support — Win7 + fallback for all)
         console.print("\n[dim]Writing boot sectors...[/dim]")
         log.info("Writing MBR active partition flag")
-        set_mbr_active_partition(disk_node)
+        mbr_ok = set_mbr_active_partition(disk_node)
         log.info("Writing Windows VBR")
-        write_windows_vbr(disk_node, mount_point)
+        vbr_ok = write_windows_vbr(disk_node, mount_point)
+        boot_sector_note = legacy_boot_sector_notice(mbr_ok, vbr_ok)
 
         # 7. Ensure partition mounted before file copy
         run(["diskutil", "mount", disk_node + "s1"], check=False)
@@ -1923,7 +2155,7 @@ def main():
 
         # 9. Flush and eject
         console.print("\n[dim]Flushing writes...[/dim]")
-        run(["diskutil", "unmountDisk", disk_node], check=False)
+        run(["diskutil", "unmountDisk", "force", disk_node], check=False)
 
         elapsed = time.monotonic() - start_time
         boot_mode = "UEFI + Legacy BIOS" if iso_info["uefi"] else "Legacy BIOS only"
@@ -1939,6 +2171,8 @@ def main():
         summary.add_row("ISO",        iso_path.name)
         summary.add_row("Drive",      f"{disk_node}  ({selected['name']}, {fmt_size(selected['size'])})")
         summary.add_row("Boot mode",  boot_note)
+        if boot_sector_note:
+            summary.add_row("Note", f"[yellow]{boot_sector_note}[/yellow]")
         summary.add_row("Time taken", f"[bold cyan]{fmt_duration(elapsed)}[/bold cyan]")
         summary.add_row("Log saved",  f"[dim]{log_path}[/dim]")
 
