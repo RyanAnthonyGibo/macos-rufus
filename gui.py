@@ -884,12 +884,15 @@ class DonePage(QWidget):
         boot_mode = data.get("boot_note") or (
             "UEFI + Legacy BIOS" if data.get("uefi") else "Legacy BIOS only (enable CSM on target PC)")
         elapsed = rufus.fmt_duration(data.get("elapsed", 0))
+        notice = data.get("notice")
+        notice_line = f"\nNote: {notice}\n" if notice else ""
         self.summary.setPlainText(
             f"ISO: {iso_path.name}\n"
             f"Drive: {drive['node']} ({drive['name']}, {fmt_size(drive['size'])})\n"
             f"Boot mode: {boot_mode}\n"
             f"Time taken: {elapsed}\n"
-            f"Log: {data.get('log_path', '')}\n\n"
+            f"Log: {data.get('log_path', '')}\n"
+            f"{notice_line}\n"
             "Safe to unplug."
         )
 

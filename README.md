@@ -1,472 +1,300 @@
-# 🖥️ macos-rufus
+# Rufus for Mac — Create a Bootable Windows 11 USB on macOS
 
-> **The Rufus alternative for macOS** — create bootable Windows 7 / 8 / 8.1 / 10 / 11 USB drives directly from your Mac. No VMs, no Boot Camp, no nonsense.
+Create a bootable Windows or Linux USB from an ISO on an Apple Silicon or Intel Mac. No virtual machine, no Boot Camp, and no Windows PC required.
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![macOS](https://img.shields.io/badge/macOS-12%2B-000000?style=flat-square&logo=apple&logoColor=white)](https://apple.com/macos)
+[![Fork of yaviral17/macos-rufus](https://img.shields.io/badge/fork-yaviral17%2Fmacos--rufus-blue)](https://github.com/yaviral17/macos-rufus)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![macOS 12+](https://img.shields.io/badge/macOS-12%2B-000000?style=flat-square&logo=apple&logoColor=white)](https://github.com/yaviral17/macos-rufus)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Windows 7](https://img.shields.io/badge/Windows-7-0078D6?style=flat-square&logo=windows&logoColor=white)](https://microsoft.com)
-[![Windows 10](https://img.shields.io/badge/Windows-10-0078D6?style=flat-square&logo=windows&logoColor=white)](https://microsoft.com)
-[![Windows 11](https://img.shields.io/badge/Windows-11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://microsoft.com)
+[![Windows 11](https://img.shields.io/badge/Windows-11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://www.microsoft.com/software-download/windows11)
 
----
+**macos-rufus** is a free, open-source bootable USB creator for macOS. It is the Rufus-style tool people look for with searches such as "rufus for mac", "rufus macos", "create bootable windows 11 usb on mac", "windows 11 bootable usb mac apple silicon", "bootable usb creator macos", "iso to usb mac", and "linux bootable usb mac".
 
-## 📌 What Is This?
+## Credits
 
-**macos-rufus** is an open-source command-line tool for macOS that does exactly one thing, perfectly: it turns a Windows ISO file into a bootable USB drive — for every Windows version from 7 to 11.
+This repository is a fork of [yaviral17/macos-rufus](https://github.com/yaviral17/macos-rufus) by [@yaviral17](https://github.com/yaviral17). All original credit goes to them. The [MIT license](LICENSE) is preserved, and the copyright notice in that file is unchanged.
 
-If you've ever searched for:
+Homebrew and the in-app update check follow the upstream project. See [Install](#install) for how to run **this** fork.
 
-- *"Rufus for Mac"*
-- *"How to create bootable Windows USB on macOS"*
-- *"Make Windows 11 bootable USB from Mac"*
-- *"Rufus alternative macOS"*
-- *"Create Windows 7 bootable USB on Mac"*
-- *"dd command Windows ISO Mac"* (hint: `dd` doesn't work for Windows ISOs)
-- *"How to install Windows from a Mac without Boot Camp"*
+## Contents
 
-…you found the right tool.
+- [What it does](#what-it-does)
+- [Features](#features)
+- [Supported systems](#supported-systems)
+- [Install](#install)
+- [Usage](#usage)
+- [GUI](#gui)
+- [Troubleshooting and FAQ](#troubleshooting-and-faq)
+  - [Errno 16 Resource busy on /dev/rdisk](#resource-busy)
+- [How a Windows USB is built](#how-a-windows-usb-is-built)
+- [Requirements](#requirements)
+- [Updating](#updating)
+- [Credits](#credits-1)
+- [License](#license)
 
----
+## What it does
 
-## ✨ Features
+Point it at a Windows or Linux ISO and a USB stick. It lists external drives, asks you to confirm, erases the stick, and writes a layout the target PC can boot.
 
-| Feature | Details |
-|---|---|
-| **Windows 7, 8, 8.1, 10, 11 support** | All versions, UEFI and legacy BIOS |
-| **Built-in Windows 10/11 ISO downloader** | Pick an OS from a menu — fetches the real Microsoft ISO link directly, no Media Creation Tool |
-| **Managed download folder** | Downloaded ISOs are saved to `~/Downloads/macos-rufus/isos` and reused on later runs instead of re-downloading |
-| **Resumable downloads** | Kill the script mid-download and it'll offer to pick up where it left off next run — even regenerating an expired link automatically |
-| **Auto self-elevation** | Prompts for your password itself — no `sudo` prefix needed |
-| **Auto-installs dependencies** | Missing `wimlib`? Script offers to install via Homebrew automatically |
-| **Auto-detects & applies updates** | Checks GitHub for a newer release on startup (at most once a day) and offers to update itself — via `brew upgrade` or `git pull`, whichever way you installed it |
-| **Handles install.wim > 4 GB** | Splits oversized WIM files — the #1 cause of failure on other tools |
-| **Writes Windows VBR boot sector** | Patches `boot/bootsect.dat` from the ISO onto the USB — required for Win7 legacy BIOS boot |
-| **Sets MBR active partition flag** | Pure Python struct write — no `ms-sys` or external tool required |
-| **ISO auto-detection** | Detects UEFI vs legacy-only ISOs, warns when CSM is needed on target PC |
-| **FAT32 + MBR format** | Maximum compatibility across UEFI and legacy BIOS systems |
-| **Interactive USB picker** | Lists all connected USB drives with size and name — no guessing device paths |
-| **Safe by design** | External-only disk listing, explicit warning, manual confirm before any write |
-| **Parallel file copy** | 4-thread concurrent copy with 1 MB buffers — saturates USB write bandwidth |
-| **Beautiful terminal UI** | Powered by `rich` — color, tables, progress bars with speed + ETA |
-| **Drag-and-drop ISO path** | Drag your `.iso` file into the terminal, or paste its path — escaped spaces, quotes and `file://` links are handled automatically |
+For Windows it formats FAT32 with an MBR partition table and copies the ISO **contents** onto the stick, including a legacy BIOS boot sector when the ISO provides one. Copying the `.iso` file itself with `dd` does not make a bootable Windows USB.
 
----
+For a hybrid Linux ISO it can raw-write the image (the same idea as `dd`). For a non-hybrid Linux ISO that contains UEFI boot files, it copies those files to a FAT32 stick.
 
-## 🚀 Quick Start
+The stick is for booting a PC. This tool only offers external disks, so it does not install Windows onto the Mac's internal drive.
 
-### Option 1 — Homebrew (recommended)
+## Features
+
+- Windows 11, 10, 8.1, and 7 from the menu, plus any Windows ISO you already have (including Windows 8)
+- Linux menu entries for Ubuntu, Arch Linux, Kali Linux, Pop!_OS, and Omarchy, plus any ISO you already have
+- Windows 10 and 11 ISO download from Microsoft, saved under `~/Downloads/macos-rufus/isos` and reused on the next run
+- Resumable downloads, including a fresh link when Microsoft's URL has expired
+- `install.wim` / `install.esd` larger than 4 GiB split with `wimlib` so they fit on FAT32; solid WIMs (current Windows 11 images) are re-exported to LZX first
+- MBR active-partition flag and Windows FAT32 boot sector for legacy BIOS, written in Python
+- Hybrid Linux ISOs written raw, with an optional read-back verify
+- Non-hybrid Linux ISOs copied to FAT32, MBR or GPT, UEFI boot
+- External-drive picker with name, size, and bus; you confirm before anything is erased
+- Asks for an administrator password itself (no `sudo` prefix)
+- Offers to `brew install wimlib` when a large WIM needs splitting
+- Drag a `.iso` onto the terminal, or paste a path, including `file://` links and escaped spaces
+- Optional PySide6 window (`gui.py`) on the same write path
+- Retries raw `/dev/rdisk` writes when macOS remounts the stick (`Resource busy`)
+
+## Supported systems
+
+| System | How you get the ISO | How the USB boots |
+|---|---|---|
+| Windows 11 | Menu downloads it from Microsoft, or use your own file | UEFI via `efi/boot/bootx64.efi`. Windows 11 setup expects UEFI. |
+| Windows 10 | Menu downloads it from Microsoft, or use your own file | UEFI and legacy BIOS |
+| Windows 8.1 | Menu offers 32-bit and 64-bit direct images, or use your own file | UEFI and legacy BIOS |
+| Windows 7 | Menu offers a direct 32-bit Professional image, or use your own file | Legacy BIOS. Enable CSM on the target PC. Typical Windows 7 ISOs have no UEFI boot file. |
+| Windows 8 and other Windows ISOs | Choose "I already have an ISO file" | Same Windows path when the image contains `bootmgr` or `sources/install.wim` / `install.esd` |
+| Ubuntu, Arch Linux, Kali Linux, Pop!_OS, Omarchy | Menu looks up a current image, or use your own file | Hybrid images: raw write, UEFI and legacy BIOS. Others: file copy, UEFI only |
+| Other Linux ISOs | "I already have an ISO file" | Hybrid images raw-write. A non-hybrid image needs UEFI boot files |
+
+The menu's Windows 7 and 8.1 entries download fixed images (archive.org), not a live Microsoft catalog. Windows 10 and 11 use Microsoft's download page.
+
+Apple Silicon and Intel Macs both run the tool. The USB they produce is a PC boot disk. An Apple Silicon Mac does not boot a standard x64 Windows stick.
+
+## Install
+
+### Homebrew installs upstream
 
 ```bash
 brew install yaviral17/macos-rufus/macos-rufus
-```
-
-Then run from anywhere:
-
-```bash
 macos-rufus
 ```
 
-> `wimlib` is installed automatically as a dependency.
+That formula tracks [yaviral17/macos-rufus](https://github.com/yaviral17/macos-rufus). It does not install this fork, so it does not include the `/dev/rdisk` resource-busy fix below. `wimlib` is pulled in as a dependency of the formula.
 
----
-
-### Option 2 — Run from source
-
-**1. Prerequisites**
-
-Install [Homebrew](https://brew.sh) if you haven't already. That's it — the script handles the rest.
-
-> **Optional pre-install** (script will offer this automatically if missing):
-> ```bash
-> brew install wimlib   # needed for Windows 11 ISOs where install.wim > 4 GB
-> ```
-
-**2. Clone the repo**
+### Run this fork
 
 ```bash
-git clone https://github.com/yaviral17/macos-rufus.git
+git clone https://github.com/RyanAnthonyGibo/macos-rufus.git
 cd macos-rufus
+python3 -m pip install -r requirements.txt
+python3 rufus.py
 ```
 
-**3. Set up the Python virtual environment**
+On a Mac where system `pip` is blocked, install into a virtual environment and run the same script:
 
 ```bash
-python3 -m venv venv
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 rufus.py
 ```
 
-> The first time you use the automatic Windows 10/11 ISO downloader, the
-> script will offer to run `playwright install chromium` for you (one-time,
-> ~150–300 MB) — needed to get past Microsoft's download-page bot detection.
+The script asks for your password when it needs root. You do not prefix it with `sudo`.
 
-**4. Run it**
+The first Windows 10 or 11 download offers to run `python3 -m playwright install chromium` (one-time, about 150–300 MB) so it can get past Microsoft's download-page bot check. Large `install.wim` files need `wimlib` (`brew install wimlib`); the script offers to install it.
+
+## Usage
 
 ```bash
-venv/bin/python3 rufus.py
+python3 rufus.py
 ```
 
-> No `sudo` needed — the script detects it needs root access and prompts for your password automatically.
+```
+╭──────────────────────────────────────────────────────────────╮
+│  macos-rufus  —  Windows & Linux bootable USB creator        │
+│  macOS · UEFI + Legacy BIOS · Win7/8/8.1/10/11 · Ubuntu/…    │
+╰──────────────────────────────────────────────────────────────╯
+```
 
----
-
-## 🖱️ GUI App
-
-Prefer a point-and-click app over the terminal? `gui.py` is a PySide6
-(Qt) wizard built on top of the exact same `rufus.py` logic — OS selection,
-resumable downloads, disk formatting, and boot-sector writing are unchanged;
-this just adds a windowed front-end.
-
-**Run it from source:**
+1. Pick an OS, or choose "I already have an ISO file" and give the path. Drag the file in from Finder if you like.
+2. The tool lists external USB drives (device, name, size, bus). Pick one.
+3. Confirm the erase. The stick is wiped.
+4. For Windows it mounts the ISO, formats the stick as FAT32/MBR, writes boot sectors, copies the files, and splits `install.wim` when it is over 4 GiB.
+5. For a hybrid Linux ISO, choose the raw write (and optional verify) or fall back to file copy. Non-hybrid images with UEFI files use file copy and ask for MBR or GPT plus a volume label.
+6. Unplug the stick when it says it is safe. On the PC, open the firmware boot menu and select the USB entry.
 
 ```bash
-pip install -r requirements.txt   # includes PySide6
+python3 rufus.py --version
+python3 rufus.py --check-update
+python3 rufus.py --update
+```
+
+`--check-update` and `--update` look at upstream releases. See [Updating](#updating).
+
+## GUI
+
+`gui.py` is a PySide6 wizard on the same `rufus.py` operations: pick an OS, download or browse, pick a USB drive, confirm, watch the flash.
+
+```bash
+python3 -m pip install -r requirements.txt
 python3 gui.py
 ```
 
-**Build it into a real double-clickable `macos-rufus.app`:**
+The window stays unprivileged. The flash step runs `rufus_worker.py` as root through macOS's administrator-password dialog.
+
+A double-clickable app is optional and needs `py2app`, which is not in `requirements.txt`:
 
 ```bash
-pip install py2app
+python3 -m pip install py2app
 python3 setup.py py2app
 open dist/macos-rufus.app
 ```
 
-**How privileges work in the GUI:** unlike the CLI (which re-execs itself as
-root immediately), the GUI app itself never runs as root. Only the final
-"Flash Drive" step launches `rufus_worker.py` — a small script that does the
-actual mounting/formatting/writing — as root, via macOS's native
-administrator-password dialog (the same one any signed installer uses). The
-GUI window stays a normal, unprivileged process the whole time and just
-watches that worker's progress.
+## Troubleshooting and FAQ
 
-The wizard flow: pick an OS → download or browse for an ISO (pause/resume
-supported, same as the CLI) → pick a USB drive → confirm → watch it flash →
-done. An incomplete download from a previous session is detected on launch
-and offered for resume automatically.
+<a id="resource-busy"></a>
 
----
+### Error: [Errno 16] Resource busy: '/dev/rdiskN'
 
-## 📖 Step-by-Step Usage (CLI)
+Seen on macOS (including Apple Silicon, upstream 1.3.0 from Homebrew) right after the stick is formatted. The log shows `Writing boot sectors...` and then:
 
-```
-╭──────────────────────────────────────────────────────────────╮
-│  macos-rufus  —  Windows bootable USB creator                │
-│          macOS · UEFI + Legacy BIOS · Win7/8/8.1/10/11       │
-╰──────────────────────────────────────────────────────────────╯
+```text
+Error: [Errno 16] Resource busy: '/dev/rdisk13'
 ```
 
-**Step 1 — Pick an OS**
+The traceback runs `main()` → `set_mbr_active_partition()` → `open(..., "r+b")` on `/dev/rdiskN`.
 
-```
-                  Select Operating System
-┏━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
-┃ #   ┃ OS                         ┃ Auto-download        ┃
-┡━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
-│ 1   │ Windows 11                 │ Yes                  │
-│ 2   │ Windows 10                 │ Yes                  │
-│ 3   │ Windows 8.1                │ No — manual ISO only │
-│ 4   │ Windows 7                  │ No — manual ISO only │
-│ 5   │ I already have an ISO file │ No — manual ISO only │
-└─────┴────────────────────────────┴──────────────────────┘
-Select an OS: 1
-```
+macOS DiskArbitration remounts the new FAT32 volume immediately after `diskutil unmountDisk`. The raw disk is busy while that volume is mounted. A read-only open can succeed, and the following write open fails with Errno 16.
 
-- **Windows 10 / 11** — pick an edition and language, and the script fetches
-  a real, direct ISO link (the same one behind the "no Media Creation Tool"
-  trick) and downloads it straight into `~/Downloads/macos-rufus/isos`.
-  - Getting the actual download link requires briefly driving a real
-    (headless) Chromium browser, because Microsoft's link-generation API
-    blocks plain HTTP requests with bot detection. The first time you use
-    this, you'll be prompted to let Playwright download Chromium
-    (one-time, ~150–300 MB).
-  - If a matching ISO was already downloaded before, you'll be offered it
-    first instead of downloading again.
-  - If the script is killed mid-download, the next run detects the partial
-    file and offers to resume it — even regenerating the link automatically
-    if it expired in the meantime.
-- **Windows 8.1 / 7 / "I already have an ISO"** — Microsoft no longer serves
-  these through the API, so you'll be prompted for a path instead:
+This fork force-unmounts and retries the MBR write, the Windows boot-sector write, and Linux raw ISO writes on one file descriptor (`pread` / `pwrite` or a single read-write fd), so the volume cannot remount between the read and the write. If the MBR flag or the FAT32 boot sector still cannot be written, the tool prints a warning and continues. Those sectors matter for legacy BIOS. Windows 8.1, 10, and 11 boot with UEFI from `efi/boot/bootx64.efi` and do not need them. A Linux raw write still stops if the disk never frees up, because that write is the entire image.
 
-```
-Path to Windows ISO: /Users/you/Downloads/Win11_23H2_English_x64.iso
-```
+`brew install` does not include this fix. Clone this fork and run `python3 rufus.py` as in [Install](#install).
 
-Drag and drop the `.iso` file directly from Finder into the terminal, or paste its path — escaped spaces (`My\ ISOs`), quoted paths and `file://` links are handled automatically. Arrow keys work for fixing typos.
+If a warning still appears, quit Disk Utility and anything else using the stick, then run the tool again. Legacy BIOS (Windows 7, and older PCs) needs those sectors; UEFI does not.
 
-**Step 2 — ISO analysis**
+### install.wim is larger than 4 GB (FAT32)
 
-```
-  Property                              Value
-  UEFI boot (efi/boot/bootx64.efi)     Yes
-  Legacy BIOS boot (bootmgr)           Yes
-  VBR source (boot/bootsect.dat)       Yes
-  Detected type                        Windows 8.1 / 10 / 11
-```
+FAT32 cannot store a file of 4 GiB or more. Windows 11's `sources/install.wim` is often bigger than that. macos-rufus calls `wimlib-imagex split` and writes `install.swm`, `install2.swm`, and so on, in 3800 MB pieces. Windows Setup reads the split set itself.
 
-For Windows 7 ISOs, you'll see a warning to enable CSM/Legacy Boot on the target PC.
+Some Windows 11 images store a solid WIM, which `wimlib` cannot split directly. The tool re-exports it to a normal LZX WIM in a temporary directory, then splits that. That step needs free space on the Mac on the order of the WIM size, and it is checked before the USB is erased.
 
-**Step 3 — Pick your USB drive**
+If splitting fails, install wimlib yourself (`brew install wimlib`) and check free disk space. A Linux file-copy (non-hybrid) stick is also FAT32: a single file over 4 GiB in that ISO stops the copy. Hybrid Linux images are raw-written, so that per-file limit does not apply.
 
-```
-┌───────────────────────────────────────────────────────────┐
-│                    Detected USB Drives                    │
-├───┬──────────────┬────────────────────┬────────┬─────────┤
-│ # │ Device       │ Name               │   Size │ Bus     │
-├───┼──────────────┼────────────────────┼────────┼─────────┤
-│ 1 │ /dev/disk4   │ SanDisk Ultra USB  │ 32.0 GB│ USB     │
-│ 2 │ /dev/disk5   │ Kingston DataTrav… │ 64.0 GB│ USB     │
-└───┴──────────────┴────────────────────┴────────┴─────────┘
+### UEFI and legacy BIOS
 
-Select USB drive number: 1
-```
+- **UEFI.** Modern PCs, and every Windows 11 install, boot `efi/boot/bootx64.efi` from the FAT32 partition. In the firmware boot menu, choose the USB entry that is marked UEFI. Windows 11 does not need the MBR active flag.
+- **Legacy BIOS / CSM.** Older PCs boot the MBR, then the FAT32 volume boot record, then `bootmgr`. The tool sets the first MBR partition active (`0x80`) and, when `boot/bootsect.dat` is in the ISO, merges that Windows boot sector with the FAT32 BIOS parameter block diskutil wrote. Windows 7 ISOs usually need CSM enabled on the target PC.
+- **Secure Boot.** Turn it off if Windows Setup does not start, and turn it back on after install if you want it.
+- **Which entry to pick.** Windows 8.1, 10, and 11: the UEFI USB entry. Windows 7: the legacy / CSM USB entry.
 
-**Step 4 — Confirm**
+### Apple Silicon and Intel
 
-```
-WARNING: /dev/disk4 (SanDisk Ultra USB, 32.0 GB) will be completely erased.
-Proceed? [y/N]:
-```
+The script is Python and runs on Apple Silicon (M1 and later) and on Intel Macs.
 
-**Step 5 — Sit back**
+"Windows 11 bootable USB on Mac Apple Silicon" means building the stick **on** that Mac for a PC. The Mac itself is not the machine that boots the stick. Apple Silicon Macs do not boot official x64 Windows from USB. Intel Macs are the same from this tool's point of view: it writes an external PC installer, and it never targets the internal disk. Installing Windows onto an Intel Mac's internal drive is Boot Camp's job, not this program's.
 
-The tool will:
-1. Mount the ISO read-only via `hdiutil`
-2. Erase and format the USB as FAT32 + MBR
-3. Set the MBR active partition flag (legacy BIOS boot requirement)
-4. Write the Windows FAT32 VBR from `boot/bootsect.dat` in the ISO (Win7 support)
-5. Copy all boot files in parallel (4 threads, 1 MB buffers) with live progress bar
-6. Copy `install.wim` in 4 MB chunks with speed + ETA display — or split automatically if > 4 GiB
-7. Flush writes and unmount cleanly
+Use a USB stick the ISO fits on. 16 GB is a practical size for Windows 11.
 
----
+### The USB does not boot on the PC
 
-## ⚙️ How It Works (Technical)
+1. Open the firmware boot menu (often F12, F2, Esc, or Del).
+2. For Windows 8.1, 10, and 11, select the **UEFI** USB entry.
+3. For Windows 7, enable CSM / legacy boot and select the legacy USB entry.
+4. If Setup does not launch, disable Secure Boot for the install.
+5. Rewrite the stick if the copy was interrupted. A half-written FAT32 volume will not boot.
 
-### Why not just use `dd`?
+### No external USB drives detected
 
-Unlike Linux ISOs (hybrid ISOs that `dd` writes byte-for-byte), **Windows ISOs are not `dd`-compatible**. Writing a Windows ISO with `dd` produces a non-bootable USB. You need to:
+The picker uses `diskutil list` limited to external physical disks. Internal drives are omitted on purpose. If the stick is missing, check the cable and port, confirm it shows up in Disk Utility, and run `diskutil list`.
 
-1. Format the USB with a real partition table (MBR) and filesystem (FAT32)
-2. Copy the ISO *contents*, not the ISO image itself
-3. Write the correct boot sector code so BIOS knows how to start Windows
+### Automatic Windows download failed
 
-### The 4 GiB problem
+Windows 10 and 11 links are fetched by driving Microsoft's download page in headless Chromium, because a plain HTTP client is blocked. Install the browser with `python3 -m playwright install chromium`, confirm `microsoft.com` loads, or download the ISO yourself and pass the path when asked.
 
-FAT32 has a hard per-file limit of 4,294,967,295 bytes (~4 GiB). Windows 11's `install.wim` often exceeds this. Most tools fail silently here.
+Windows 7 and 8.1 in the menu are direct image links. If one of those fails, supply your own ISO.
 
-**macos-rufus** detects this automatically and uses `wimlib-imagex split` to break the WIM into 3,800 MB chunks (`install.swm`, `install2.swm`, …). The Windows installer natively reassembles split WIM files — no extra steps on the target machine.
+### Pasted text shows `^[[200~` or `00~`, or a dropped path is "not found"
 
-Newer Windows 11 ISOs (24H2+) store `install.wim` as a *solid* WIM, which wimlib cannot split directly. In that case macos-rufus first re-exports it to a regular (LZX) WIM in a temporary folder, then splits it. This takes a few extra minutes and needs free space on your Mac roughly equal to the size of `install.wim` — it is checked before the USB is erased.
+That is the terminal's bracketed-paste wrapping. The prompts strip those markers. If a path is still rejected, the message quotes it exactly as received; include that line in a bug report.
 
-### Windows 7 legacy BIOS boot — the VBR problem
+### hdiutil: attach failed
 
-This is what breaks every other "copy files to USB" approach for Windows 7:
+The ISO may be incomplete, or already mounted. Compare its size with the download, eject any existing mount, and try again. Cleanup uses `hdiutil detach -force` and retries when the mount is busy.
 
-1. **MBR active partition flag** — the MBR partition table entry must have byte 0 set to `0x80` (bootable). The script writes this directly into the raw MBR using Python's `struct` — no external tool needed.
+### The password prompt never appears
 
-2. **Windows FAT32 VBR** — `diskutil` formats the partition with a generic FAT32 Volume Boot Record. Legacy BIOS reads the VBR to find `bootmgr`, but the generic VBR doesn't know about Windows. Every Windows ISO ships `boot/bootsect.dat` — the exact VBR code Windows needs. The script reads it, merges it with the existing FAT32 BPB (bytes 3–89, which hold filesystem metadata and must be preserved), and writes the merged sector back to the raw partition device.
+Run `python3 rufus.py` or `macos-rufus` directly. The process re-executes itself with `sudo` and macOS asks for the password. Starting it under `sudo` yourself is unnecessary.
 
-   ```
-   FAT32 boot sector layout (512 bytes):
-     [0-2]    jump instruction     ← from bootsect.dat
-     [3-89]   FAT32 BPB            ← preserved from diskutil format
-     [90-511] Windows boot code    ← from bootsect.dat
-   ```
+### Garbled box-drawing characters
 
-This requires no `ms-sys`, no Wine, no Windows machine — just the ISO itself.
+The terminal is not using UTF-8. `export LANG=en_US.UTF-8` and run the tool again.
 
-### Partition scheme: MBR vs GPT
+## How a Windows USB is built
 
-MBR + FAT32 is chosen deliberately:
+1. Mount the ISO read-only with `hdiutil`.
+2. Erase the external stick as FAT32 with an MBR partition map (`diskutil eraseDisk`).
+3. Force-unmount and set the first MBR partition active, retrying if `/dev/rdiskN` is busy.
+4. If `boot/bootsect.dat` exists, merge it with the FAT32 BIOS parameter block (bytes 3–89 stay as diskutil wrote them; the jump and the boot code come from the ISO) and write that sector to the partition. Windows 8.1 and newer images sometimes omit this file; UEFI boot still works.
+5. Copy every file except `sources/install.wim` and `sources/install.esd` with four threads.
+6. Copy the WIM, or split it when it is over 4 GiB.
+7. Force-unmount the stick.
 
-- **UEFI systems** — boot via `efi/boot/bootx64.efi` (all modern Windows ISOs) — works on FAT32 + MBR
-- **Legacy BIOS systems** — boot via MBR → VBR → `bootmgr` — requires MBR scheme
-- GPT + FAT32 works on pure UEFI but breaks on BIOS — MBR is the universally safe default
+MBR + FAT32 is the Windows layout because UEFI boots the FAT32 EFI file from an MBR disk, and legacy BIOS needs an MBR. Linux file-copy mode can use GPT instead. Linux hybrid mode overwrites the whole disk with the ISO.
 
-### Windows version compatibility
+## Requirements
 
-| Version | UEFI boot | Legacy BIOS boot | Notes |
-|---|---|---|---|
-| Windows 7 | ❌ most ISOs | ✅ via VBR write | Enable CSM on modern PCs |
-| Windows 8 | ✅ | ✅ | Full support |
-| Windows 8.1 | ✅ | ✅ | Full support |
-| Windows 10 | ✅ | ✅ | Full support |
-| Windows 11 | ✅ | ✅ | install.wim auto-split if > 4 GiB |
-
-### Tools used under the hood
-
-| Tool | Source | Purpose |
-|---|---|---|
-| `hdiutil` | macOS built-in | Mount ISO as read-only volume |
-| `diskutil` | macOS built-in | List disks, erase, format, mount/unmount |
-| `wimlib-imagex` | Homebrew (`wimlib`) | Split install.wim > 4 GiB |
-| `rich` | pip | Terminal UI — progress bars, tables, color |
-| Python `readinto` | stdlib | Chunked WIM copy into a reused buffer — no per-chunk allocation |
-| Python `ThreadPoolExecutor` | stdlib | Parallel boot file copy across 4 threads |
-| Python `struct` | stdlib | Write MBR active flag + merge VBR sectors |
-
----
-
-## 🔧 Requirements
-
-| Requirement | Version |
+| Requirement | Notes |
 |---|---|
-| macOS | 12 Monterey or later (tested on Ventura, Sonoma, Sequoia) |
+| macOS | 12 Monterey or later, Apple Silicon or Intel. The project documents 12+ as the floor. |
 | Python | 3.11+ |
-| Homebrew | Any recent version (for wimlib auto-install) |
-| USB drive | 8 GB minimum for Windows 7/8/10, 16 GB for Windows 11 |
+| USB stick | Large enough for the ISO. 16 GB is a practical minimum for Windows 11. |
+| Homebrew | Used to install `wimlib` when a WIM must be split. Optional if you already have `wimlib-imagex` on `PATH` or your image has no oversized WIM. |
+| Network | Only for downloads and the upstream update check |
 
----
+Built-in macOS tools used: `diskutil`, `hdiutil`. Python packages are listed in `requirements.txt` (`rich`, `requests`, `playwright`, `PySide6`).
 
-## 📥 Getting the Windows ISO
+## Updating
 
-Download official ISOs directly from Microsoft:
+On startup the tool asks GitHub, at most once a day, whether [yaviral17/macos-rufus](https://github.com/yaviral17/macos-rufus) has a release newer than the version in this tree (`_GITHUB_REPO` in `rufus.py`). That check is upstream by design.
 
-- **Windows 11**: [microsoft.com/software-download/windows11](https://www.microsoft.com/software-download/windows11)
-- **Windows 10**: [microsoft.com/software-download/windows10ISO](https://www.microsoft.com/software-download/windows10ISO)
-- **Windows 7**: [microsoft.com/software-download/windows7](https://www.microsoft.com/software-download/windows7) *(requires product key)*
+- A Homebrew install updates with `brew upgrade macos-rufus` (upstream).
+- A git clone updates with `git pull` **of whatever remote that clone uses**. This fork's clone pulls this fork, which may not match the upstream version the check just offered.
+- If the install method is unclear, or the tree has local changes, it prints the upstream release URL and leaves the files alone.
 
-> **Tip for macOS users:** Microsoft's download page sometimes redirects to the Media Creation Tool (Windows-only exe). In Safari, go to **Develop → User Agent → change to any non-Windows browser** — the direct ISO download link appears.
+To stay on this fork's resource-busy fix, run it from this clone rather than switching over to the Homebrew formula.
 
----
-
-## 🔄 Updating
-
-macos-rufus checks GitHub for a newer release on startup (cached for 24h, so
-it won't slow down every run) and offers to update itself in place — via
-`brew upgrade` if you installed it with Homebrew, or `git pull` if you're
-running from a cloned checkout. In the GUI, the same check runs quietly on
-launch and shows a dismissible banner when an update is available, plus a
-**Help → Check for Updates...** menu item to check on demand.
-
-```
-python3 rufus.py --check-update   # just check, don't apply
-python3 rufus.py --update         # check and update if available
-python3 rufus.py --version        # print the installed version
-```
-
-If the script can't tell how it was installed, or the install directory has
-local changes, it won't touch anything — it just prints the update URL so
-you can grab it manually.
-
----
-
-## ❓ Troubleshooting
-
-### "No external USB drives detected"
-
-- Confirm the drive appears in Finder or Disk Utility
-- Try a different USB port or cable
-- Run `diskutil list` to verify macOS sees it
-
-### "install.wim splitting fails"
-
-- Run `brew install wimlib` manually and retry
-- Check free disk space — the split writes chunks to the USB as it goes, and solid WIMs (Win 11 24H2+) need temporary space on your Mac too
-- Garbled box-drawing characters (`â macos-rufus â`) mean your terminal isn't using UTF-8; run `export LANG=en_US.UTF-8` first
-
-### "USB not booting on target machine"
-
-1. Enter the BIOS/UEFI boot menu (`F12`, `F2`, `Esc`, or `Del` on boot)
-2. For Windows 8.1/10/11 — select USB under **UEFI** boot entries
-3. Disable **Secure Boot** if Windows Setup won't launch (re-enable after install)
-4. For Windows 7 or older PCs — enable **CSM / Legacy Boot** in BIOS
-
-### "Automatic download failed" / "Sentinel marked this request as rejected"
-
-Microsoft's link-generation API is protected by bot detection that blocks
-plain HTTP requests — the script works around this by driving a real
-headless Chromium browser through the actual download page instead. If you
-still see this error:
-
-- Make sure Playwright's Chromium is installed: `python3 -m playwright install chromium`
-- Check your internet connection can reach `microsoft.com` normally
-- As a last resort, download the ISO manually (see below) and provide the path when prompted
-
-### Pasted text shows `^[[200~` or `00~`, or a dropped path is "Not found"
-
-These come from your terminal's *bracketed paste* mode, which wraps pasted
-text in hidden markers. macos-rufus turns the mode off while it's asking a
-question and strips any markers that still get through. If you still see
-them, update to the latest version. If a path is still reported as not found,
-the error message shows it in quotes exactly as it was received, so any stray
-characters are visible — please include that line in a bug report.
-
-### "hdiutil: attach failed"
-
-- Verify the ISO isn't corrupted — check SHA256 against Microsoft's published hash
-- Check the ISO isn't already mounted (look in Finder sidebar or `diskutil list`)
-
-### Password prompt doesn't appear
-
-Run directly — don't use `sudo` yourself:
-```bash
-# Homebrew install
-macos-rufus
-
-# Source install
-venv/bin/python3 rufus.py
-```
-The script calls `sudo` internally via `os.execvp` and will prompt for your password.
-
----
-
-## 🛠️ Project Structure
+## Project layout
 
 ```
 macos-rufus/
-├── rufus.py          # CLI tool + all shared logic (OS catalog, downloads, disk ops)
-├── rufus_worker.py   # Privileged flash worker used by the GUI (runs as root)
-├── gui.py            # PySide6 GUI wizard, built on top of rufus.py
-├── setup.py          # py2app config to build macos-rufus.app
-├── requirements.txt  # Python dependencies
-├── venv/             # Python virtual environment (not committed)
-└── README.md         # This file
+├── rufus.py           # CLI and shared disk, download, and boot-sector code
+├── rufus_worker.py    # Root helper the GUI launches for the flash step
+├── gui.py             # PySide6 wizard
+├── setup.py           # optional py2app build
+├── requirements.txt
+├── tests/             # unit tests; they do not write to real disks
+├── CHANGELOG.md
+├── LICENSE            # MIT, copyright (c) 2026 yaviral17
+└── README.md
 ```
 
----
+## Credits
 
-## 🔒 Security & Safety
+This repository is a fork of [yaviral17/macos-rufus](https://github.com/yaviral17/macos-rufus) by [@yaviral17](https://github.com/yaviral17). All original credit goes to them. The software, including this fork's changes, remains under the MIT license they chose. Their copyright notice in [LICENSE](LICENSE) is preserved.
 
-- **External-only disk listing** — internal drives are never shown as targets
-- **Explicit confirmation** before any destructive operation
-- **Read-only ISO mount** — source ISO is never modified
-- **Self-elevation only when needed** — the CLI requests root via `sudo` transparently; no silent privilege escalation
-- **GUI never runs as root** — only the disk-writing worker it launches does, via macOS's native administrator-password dialog, for just the flash step
+Upstream is the source of the Windows and Linux USB workflow, the Microsoft ISO download, the WIM split, the GUI, and the boot-sector layout. This fork's change is the raw-disk retry described in the [resource-busy FAQ](#resource-busy) and in [CHANGELOG.md](CHANGELOG.md).
 
----
+Also:
 
-## 🤝 Contributing
+- [Rufus](https://rufus.ie) — the Windows USB tool this project is named after
+- [wimlib](https://wimlib.net) — splits and exports Windows images on macOS
+- [rich](https://github.com/Textualize/rich) — terminal layout and progress
 
-Pull requests welcome. Focus areas:
+## License
 
-- [ ] GPT + ExFAT/NTFS support for pure-UEFI installs (removes 4 GiB limit entirely)
-- [ ] Progress bar for WIM split operation (`wimlib-imagex split`)
-- [ ] ISO SHA256 verification against Microsoft checksums
-- [ ] Windows Server ISO support
-- [ ] GUI wrapper (Tkinter or native macOS via PyObjC)
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE).
-
----
-
-## 🙏 Acknowledgements
-
-- [Rufus](https://rufus.ie) — the original Windows tool this is inspired by
-- [wimlib](https://wimlib.net) — open-source WIM library that makes Windows 11 USB creation possible on non-Windows systems
-- [rich](https://github.com/Textualize/rich) — beautiful terminal output for Python
-
----
-
-<p align="center">
-  Made for every Mac user who just wants to install Windows without booting into a Windows machine first.
-</p>
-
-<p align="center">
-  <strong>macos-rufus</strong> · Rufus for Mac · Bootable Windows USB · macOS ISO Tool · Windows 7 USB Mac · Create Windows USB from macOS
-</p>
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 yaviral17. All original credit goes to [@yaviral17](https://github.com/yaviral17).
